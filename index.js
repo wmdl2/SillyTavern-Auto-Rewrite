@@ -165,7 +165,7 @@ function appendFeedback(ctx, text, job) {
     const index = ctx.chat.length;
     ctx.chat.push(message);
     if (ctx.chatMetadata) ctx.chatMetadata.tainted = true;
-    ctx.addOneMessage(message);
+    ctx.addOneMessage(message, { scroll: false });
     return { message, index };
 }
 

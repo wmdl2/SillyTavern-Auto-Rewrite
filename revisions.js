@@ -91,21 +91,41 @@ export function showStaging() {
     document.querySelectorAll('.auto-rewrite-preview-waiting').forEach(node => node.remove());
 }
 
-async function redraw(index, key, focus = true) {
-    if (keyOf(getContext()) !== key) return;
+function captureAnchor(index, preserve = false) {
     const viewport = document.getElementById('chat');
-    const top = viewport?.getBoundingClientRect().top ?? 0;
-    const anchor = [...(viewport?.querySelectorAll(':scope > .mes') ?? [])]
-        .find(node => !node.classList.contains('auto-rewrite-staging') && node.getBoundingClientRect().bottom > top);
+    if (!viewport) return null;
+    const top = viewport.getBoundingClientRect().top;
+    const anchor = [...viewport.querySelectorAll(':scope > .mes')]
+        .find(node => !node.classList.contains('auto-rewrite-staging')
+            && !node.classList.contains('auto-rewrite-preview-covered')
+            && node.getBoundingClientRect().bottom > top);
     const anchorId = Number(anchor?.getAttribute('mesid'));
-    const anchorOffset = anchor ? anchor.getBoundingClientRect().top - top : 0;
-    await core.redisplayChat({ startIndex: index, fade: false });
-    if (!viewport || keyOf(getContext()) !== key) return;
-    const target = viewport.querySelector(`.mes[mesid="${Number.isInteger(anchorId) && anchorId < index ? anchorId : index}"]`);
+    const readingAbove = Number.isInteger(anchorId) && anchorId < index;
+    const body = anchor?.querySelector('.mes_text') || anchor;
+    const bodyOffset = body ? body.getBoundingClientRect().top - top : 12;
+    return {
+        viewport,
+        targetId: readingAbove ? anchorId : index,
+        useBody: !readingAbove,
+        offset: readingAbove ? anchor.getBoundingClientRect().top - top : preserve && anchor ? Math.min(bodyOffset, 12) : 12,
+    };
+}
+
+function applyAnchor(pin) {
+    if (!pin?.viewport?.isConnected) return;
+    const target = pin.viewport.querySelector(`.mes[mesid="${pin.targetId}"]`);
     if (!target) return;
-    const body = focus && !(Number.isInteger(anchorId) && anchorId < index) ? target.querySelector('.mes_text') || target : target;
-    viewport.scrollTop += body.getBoundingClientRect().top - viewport.getBoundingClientRect().top
-        - (Number.isInteger(anchorId) && anchorId < index ? anchorOffset : 12);
+    const el = pin.useBody ? target.querySelector('.mes_text') || target : target;
+    pin.viewport.scrollTop += (el.getBoundingClientRect().top - pin.viewport.getBoundingClientRect().top) - pin.offset;
+}
+
+async function redraw(index, key, { preserve = false } = {}) {
+    if (keyOf(getContext()) !== key) return null;
+    const pin = captureAnchor(index, preserve);
+    await core.redisplayChat({ startIndex: index, fade: false });
+    if (keyOf(getContext()) !== key) return null;
+    applyAnchor(pin);
+    return pin;
 }
 
 function info(message) {
@@ -138,13 +158,14 @@ export async function collapse(job, result) {
     job.settled = true;
     await ctx.saveChat();
     forget(job);
-    await redraw(job.index, job.key);
+    const pin = await redraw(job.index, job.key, { preserve: true });
     if (keyOf(getContext()) !== job.key) return;
     await ctx.eventSource.emit(ctx.eventTypes.MESSAGE_DELETED, ctx.chat.length);
     if (keyOf(getContext()) !== job.key) return;
     await ctx.eventSource.emit(ctx.eventTypes.MESSAGE_UPDATED, job.index);
     if (keyOf(getContext()) !== job.key) return;
     await ctx.eventSource.emit(ctx.eventTypes.CHARACTER_MESSAGE_RENDERED, job.index, 'swipe');
+    requestAnimationFrame(() => { if (keyOf(getContext()) === job.key) applyAnchor(pin); });
     if (keyOf(getContext()) !== job.key || ctx.chat[job.index] !== final) return;
     final.swipes[final.swipe_id] = final.mes;
     final.swipe_info[final.swipe_id] = info(final);
@@ -159,9 +180,10 @@ export async function restore(job) {
     job.settled = true;
     await ctx.saveChat();
     forget(job);
-    await redraw(job.index, job.key);
+    const pin = await redraw(job.index, job.key, { preserve: true });
     if (keyOf(getContext()) !== job.key) return true;
     await ctx.eventSource.emit(ctx.eventTypes.MESSAGE_DELETED, ctx.chat.length);
+    requestAnimationFrame(() => { if (keyOf(getContext()) === job.key) applyAnchor(pin); });
     if (keyOf(getContext()) === job.key) await ctx.saveChat();
     return true;
 }
