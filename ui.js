@@ -1,6 +1,6 @@
 function duration(ms) {
     const seconds = Math.max(0, Math.floor(ms / 1000));
-    return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+    return seconds < 60 ? `${seconds}秒` : `${Math.floor(seconds / 60)}分${seconds % 60}秒`;
 }
 
 export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onRefreshModels, onAuto, onFeedback, onRewrite, onJump, onMutation }) {
@@ -117,12 +117,11 @@ export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onR
     const makeBar = () => {
         const root = document.createElement('div');
         root.className = 'auto-rewrite-actions';
-        root.innerHTML = `<div class="auto-rewrite-heading"><span class="auto-rewrite-emblem"><i class="fa-solid fa-pen-nib" aria-hidden="true"></i></span><div><b>正文重写</b><span data-caption></span></div></div>
-            <div class="auto-rewrite-buttons"><button type="button" class="auto-rewrite-primary" data-rewrite><i class="fa-solid fa-rotate-right" aria-hidden="true"></i><span>重写</span></button>
+        root.innerHTML = `<div class="auto-rewrite-main"><button type="button" class="auto-rewrite-primary" data-rewrite><i class="fa-solid fa-pen-nib" aria-hidden="true"></i><span>重写</span></button>
             <button type="button" class="auto-rewrite-secondary" data-jump><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i><span>查看原稿</span></button>
-            <label class="auto-rewrite-quick-toggle" title="生成结束后自动重写一次"><input type="checkbox" data-auto><span>自动</span></label>
-            <button type="button" class="auto-rewrite-icon-button" data-settings title="重写设置" aria-label="重写设置"><i class="fa-solid fa-sliders" aria-hidden="true"></i></button></div>
-            <div class="auto-rewrite-time" data-time></div>`;
+            <div class="auto-rewrite-meta"><span data-caption></span><span class="auto-rewrite-time" data-time></span></div></div>
+            <div class="auto-rewrite-buttons"><label class="auto-rewrite-quick-toggle" title="生成结束后自动重写一次"><input type="checkbox" data-auto><span>自动</span></label>
+            <button type="button" class="auto-rewrite-icon-button" data-settings title="重写设置" aria-label="重写设置"><i class="fa-solid fa-sliders" aria-hidden="true"></i></button></div>`;
         root.querySelector('[data-rewrite]').addEventListener('click', () => onRewrite(shown?.reply));
         root.querySelector('[data-jump]').addEventListener('click', () => onJump(shown?.reply, shown?.link?.target));
         root.querySelector('[data-auto]').addEventListener('change', event => { onAuto(event.target.checked); sync(); refresh(); });
@@ -229,8 +228,13 @@ export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onR
         if (button.querySelector('span').textContent !== text) button.querySelector('span').textContent = text;
         button.title = view.composerBusy ? '请先发送或清空输入框中的草稿与附件' : `重写当前第 ${view.reply.swipeId + 1} 版`;
         bar.dataset.busy = String(view.busy);
-        const caption = view.busy ? `${view.reply.preview ? '重写中 · 新版本 · ' : ''}${view.status}` : `${view.link?.original ? '正在查看原稿' : view.link ? '重写版' : '当前正文'} · 第 ${view.reply.swipeId + 1}/${view.reply.message.swipes?.length || 1} 版`;
-        if (bar.querySelector('[data-caption]').textContent !== caption) bar.querySelector('[data-caption]').textContent = caption;
+        const swipeCount = view.reply.message.swipes?.length || 1;
+        const caption = view.busy
+            ? `${view.reply.preview ? '重写中 · ' : ''}${view.status}`
+            : view.link?.original ? '正在看原稿' : view.link ? '已重写' : '';
+        const captionEl = bar.querySelector('[data-caption]');
+        captionEl.hidden = !caption;
+        if (captionEl.textContent !== caption) captionEl.textContent = caption;
         const jump = bar.querySelector('[data-jump]');
         jump.hidden = view.busy || !view.link;
         jump.disabled = view.busy || !view.idle;
@@ -240,8 +244,13 @@ export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onR
         const time = bar.querySelector('[data-time]');
         const end = timing?.finishedAt ?? Date.now();
         time.hidden = !timing;
-        const label = timing ? `${view.automatic ? `总用时 ${duration(end - timing.startedAt)} · ` : ''}重写 ${duration(end - timing.rewriteStartedAt)}` : '';
+        const label = timing
+            ? `${view.automatic ? `总${duration(end - timing.startedAt)} · ` : ''}重写${duration(end - timing.rewriteStartedAt)}`
+            : '';
         if (time.textContent !== label) time.textContent = label;
+        const meta = bar.querySelector('.auto-rewrite-meta');
+        meta.hidden = !caption && !timing;
+        meta.title = `第 ${view.reply.swipeId + 1}/${swipeCount} 版${caption ? ` · ${caption}` : ''}${label ? ` · ${label}` : ''}`;
         if (view.busy && !timing?.finishedAt && !clock) clock = setInterval(refresh, 1000);
         if ((!view.busy || timing?.finishedAt) && clock) { clearInterval(clock); clock = null; }
         if (!view.idle && !view.busy && !poll) poll = setTimeout(() => { poll = null; refresh(); }, 200);
