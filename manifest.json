@@ -1,0 +1,13 @@
+{
+    "display_name": "自动重写 · 独立版",
+    "author": "wujimol",
+    "version": "2.0.0",
+    "description": "首轮结束后追加修改意见作为普通用户消息，再沿用当前连接和预设生成一次新回复。无需修改酒馆本体。",
+    "homePage": "https://github.com/wujimol/SillyTavern-Auto-Rewrite",
+    "loading_order": 220,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "hooks": { "enable": "enable", "disable": "disable" }
+}
