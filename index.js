@@ -8,7 +8,14 @@ import { REVISION, TEMP, remember, collapse, restore, recover, markStaging, live
 
 const KEY = 'rewrite_writer';
 const RUNTIME = Symbol.for('st.auto-rewrite.standalone');
-const DEFAULT_FEEDBACK = '上一版的剧情推进和角色行为逻辑不够合理。请根据人物设定、已有关系和当前处境，重新写上一条回复，不要接着初稿续写。重点修正动机与因果、突兀转折和不合理的角色行为。保持当前预设要求的正文、小总结及其他输出格式，只输出完整重写结果。';
+const DEFAULT_FEEDBACK = `上一轮正文问题很多：讲故事水平太差, 角色刻画不到位, 太过刻意俗套尬不自然，台词又尬又怪，逻辑不通，剧情和文风也有毛病。需要重写
+写本轮正文前，先用<pre>...</pre>做一次预分析，挑出上一轮的问题。</pre>后空一行，再写<content>。
+
+1. 角色刻画与心理, 行为逻辑有哪些问题（约1000字）
+2. 台词（约500字）: 哪些台词尬,怪,不合理,逻辑有问题
+3. 其他问题, 800字
+
+每部分最后用一两句写出"本轮改法"。正文要照着这些改法写，不能分析完了照旧。`;
 let installed = false;
 let ui;
 let cycle;
