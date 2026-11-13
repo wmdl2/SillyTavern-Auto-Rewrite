@@ -3,7 +3,37 @@ function duration(ms) {
     return seconds < 60 ? `${seconds}秒` : `${Math.floor(seconds / 60)}分${seconds % 60}秒`;
 }
 
-export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onRefreshModels, onAuto, onFeedback, onRewrite, onJump, onMutation }) {
+function syncSelect(select, entries, value) {
+    const signature = JSON.stringify(entries);
+    if (select.dataset.entries !== signature) {
+        select.replaceChildren(...entries.map(([id, label]) => new Option(label, id)));
+        select.dataset.entries = signature;
+    }
+    select.value = value;
+}
+
+function syncModelPicker({ pickerWrap, picker, list, models, value, allowEmpty, disabled }) {
+    const emptyLabel = allowEmpty ? '沿用默认模型（不单独指定）' : '从列表选择模型…';
+    const entries = [['', emptyLabel], ...models.map(m => [m.id, m.label && m.label !== m.id ? `${m.label} (${m.id})` : m.id])];
+    const signature = JSON.stringify(entries);
+    if (picker.dataset.entries !== signature) {
+        picker.replaceChildren(...entries.map(([id, label], idx) => {
+            const opt = new Option(label, id);
+            if (idx === 0 && !allowEmpty) opt.disabled = true;
+            return opt;
+        }));
+        picker.dataset.entries = signature;
+    }
+    if (list.dataset.entries !== signature) {
+        list.replaceChildren(...models.map(m => new Option(m.label || m.id, m.id)));
+        list.dataset.entries = signature;
+    }
+    picker.value = models.some(m => m.id === value) ? value : '';
+    picker.disabled = disabled || models.length === 0;
+    pickerWrap.hidden = models.length === 0;
+}
+
+export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onRefreshModels, onMainProfile, onMainModel, onRefreshMainModels, onAuto, onFeedback, onRewrite, onJump, onMutation }) {
     let panel, bar, footer, nativePager, pagerSlot, dialog, observer, frame, poll, clock, shown;
     let dock, dockViewport, dockObserver, dockPadding;
     let disposed = false;
@@ -14,17 +44,59 @@ export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onR
         if (disposed || frame) return;
         frame = requestAnimationFrame(() => { frame = null; render(); });
     };
+    const abortForm = (root, role) => {
+        const prefix = `${root.dataset.formId}:${role ? `${role}` : ''}`;
+        for (const [key, req] of requests) {
+            if (key.startsWith(prefix)) { req.abort(); requests.delete(key); }
+        }
+    };
+    const triggerRefresh = async (root, role, msgKey, fetcher) => {
+        const key = `${root.dataset.formId}:${role}`;
+        requests.get(key)?.abort();
+        const request = new AbortController();
+        const timeout = setTimeout(() => request.abort(), 20000);
+        requests.set(key, request);
+        root.dataset[msgKey] = '正在读取模型列表…'; sync();
+        try {
+            const models = await fetcher(request.signal);
+            if (requests.get(key) === request) root.dataset[msgKey] = `已获取 ${models.length} 个可选型号，也可手动输入`;
+        } catch (error) {
+            if (requests.get(key) === request) root.dataset[msgKey] = request.signal.aborted
+                ? '读取已取消或超时，可以手动填写型号' : error.message;
+        } finally {
+            clearTimeout(timeout);
+            if (requests.get(key) === request) requests.delete(key);
+            sync();
+        }
+    };
     const controls = () => {
         const root = document.createElement('div');
         root.className = 'auto-rewrite-controls';
-        const listId = `auto-rewrite-models-${++formSequence}`;
+        const seq = ++formSequence;
+        root.dataset.formId = String(seq);
+        const mainListId = `auto-rewrite-main-models-${seq}`;
+        const rewriteListId = `auto-rewrite-models-${seq}`;
         root.innerHTML = `<label class="auto-rewrite-setting-toggle"><span><b>自动重写一次</b><small>首轮结束后，按修改意见再写一版</small></span><input type="checkbox" data-auto></label>
-            <section class="auto-rewrite-model-card" aria-label="重写模型设置">
-                <div class="auto-rewrite-model-heading"><span class="auto-rewrite-model-icon"><i class="fa-solid fa-layer-group" aria-hidden="true"></i></span><div><b>重写模型</b><small>为第二轮单独选择连接与型号</small></div><span class="auto-rewrite-model-badge" data-source></span></div>
-                <label class="auto-rewrite-label"><span>API 配置</span><select class="text_pole" data-profile aria-label="重写使用的 API 配置"></select></label>
-                <label class="auto-rewrite-label"><span>模型型号</span><span class="auto-rewrite-model-input"><input class="text_pole" type="text" list="${listId}" autocomplete="off" spellcheck="false" data-model aria-label="重写模型型号"><button type="button" data-refresh-models title="读取所选 API 的模型列表" aria-label="刷新模型列表"><i class="fa-solid fa-rotate" aria-hidden="true"></i></button></span></label>
-                <datalist id="${listId}" data-models></datalist>
-                <p class="auto-rewrite-model-hint" data-model-hint></p>
+            <section class="auto-rewrite-model-card" aria-label="模型与 API 设置">
+                <div class="auto-rewrite-model-heading"><span class="auto-rewrite-model-icon"><i class="fa-solid fa-layer-group" aria-hidden="true"></i></span><div><b>API 与模型</b><small>可直接切换主 API，也能为第二轮重写单独指定模型</small></div></div>
+                <div class="auto-rewrite-route-group" data-group="main">
+                    <div class="auto-rewrite-route-title"><span class="auto-rewrite-role-tag">首轮 · 主 API</span><small>全局生效，影响正常聊天</small><span class="auto-rewrite-model-badge" data-main-source></span></div>
+                    <div class="auto-rewrite-route-fields">
+                        <div class="auto-rewrite-label"><span>API 配置</span><div class="auto-rewrite-select-wrap"><select class="auto-rewrite-select" data-main-profile aria-label="主 API 连接配置"></select><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></div></div>
+                        <div class="auto-rewrite-label"><span>模型型号</span><div class="auto-rewrite-combo"><input type="text" list="${mainListId}" autocomplete="off" spellcheck="false" data-main-model aria-label="主 API 模型型号"><span class="auto-rewrite-picker" data-main-picker-wrap title="从列表选择主模型"><select data-main-model-picker aria-label="从列表选择主 API 模型"></select><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></span><button type="button" class="auto-rewrite-combo-btn" data-refresh-main title="读取主 API 的模型列表" aria-label="刷新主 API 模型列表"><i class="fa-solid fa-rotate" aria-hidden="true"></i></button></div></div>
+                    </div>
+                    <datalist id="${mainListId}" data-main-models></datalist>
+                    <p class="auto-rewrite-model-hint" data-main-hint hidden></p>
+                </div>
+                <div class="auto-rewrite-route-group" data-group="rewrite">
+                    <div class="auto-rewrite-route-title"><span class="auto-rewrite-role-tag is-accent">二轮 · 重写</span><small>仅重写借用，写完自动恢复</small><span class="auto-rewrite-model-badge is-accent" data-source></span></div>
+                    <div class="auto-rewrite-route-fields">
+                        <div class="auto-rewrite-label"><span>API 配置</span><div class="auto-rewrite-select-wrap"><select class="auto-rewrite-select" data-profile aria-label="重写使用的 API 配置"></select><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></div></div>
+                        <div class="auto-rewrite-label"><span>模型型号</span><div class="auto-rewrite-combo"><input type="text" list="${rewriteListId}" autocomplete="off" spellcheck="false" data-model aria-label="重写模型型号"><span class="auto-rewrite-picker" data-picker-wrap title="从列表选择重写模型"><select data-model-picker aria-label="从列表选择重写模型"></select><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></span><button type="button" class="auto-rewrite-combo-btn" data-refresh-models title="读取重写 API 的模型列表" aria-label="刷新重写模型列表"><i class="fa-solid fa-rotate" aria-hidden="true"></i></button></div></div>
+                    </div>
+                    <datalist id="${rewriteListId}" data-models></datalist>
+                    <p class="auto-rewrite-model-hint" data-model-hint></p>
+                </div>
                 <div class="auto-rewrite-model-summary"><i class="fa-solid fa-arrow-turn-up" aria-hidden="true"></i><span data-route-summary></span></div>
             </section>
             <label class="auto-rewrite-label">修改意见<textarea class="text_pole" rows="4" spellcheck="false" data-feedback></textarea></label>
@@ -32,32 +104,47 @@ export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onR
             <p class="auto-rewrite-status" data-status role="status"></p>`;
         root.querySelector('[data-auto]').addEventListener('change', event => { onAuto(event.target.checked); sync(); refresh(); });
         root.querySelector('[data-feedback]').addEventListener('input', event => { onFeedback(event.target.value); sync(); });
+
+        const mainModelInput = root.querySelector('[data-main-model]');
+        const commitMainModel = value => {
+            const next = String(value ?? '').trim();
+            if (!next || next === getRouting().mainModel) return;
+            onMainModel(next);
+        };
+        root.querySelector('[data-main-profile]').addEventListener('change', event => {
+            abortForm(root, 'main');
+            delete root.dataset.mainModelsMessage;
+            onMainProfile(event.target.value);
+        });
+        mainModelInput.addEventListener('change', () => commitMainModel(mainModelInput.value));
+        mainModelInput.addEventListener('keydown', event => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            commitMainModel(mainModelInput.value);
+        });
+        root.querySelector('[data-main-model-picker]').addEventListener('change', event => {
+            const val = event.target.value;
+            if (!val) return;
+            mainModelInput.value = val;
+            commitMainModel(val);
+        });
+        root.querySelector('[data-refresh-main]').addEventListener('click', () => triggerRefresh(root, 'main', 'mainModelsMessage', onRefreshMainModels));
+
+        const rewriteModelInput = root.querySelector('[data-model]');
         root.querySelector('[data-profile]').addEventListener('change', event => {
-            requests.get(root)?.abort(); requests.delete(root);
+            abortForm(root, 'rewrite');
             delete root.dataset.modelsMessage;
             onRoute({ profileId: event.target.value, model: '' }); sync(); refresh();
         });
-        root.querySelector('[data-model]').addEventListener('input', event => {
+        rewriteModelInput.addEventListener('input', event => {
             onRoute({ model: event.target.value }); sync();
         });
-        root.querySelector('[data-refresh-models]').addEventListener('click', async () => {
-            requests.get(root)?.abort();
-            const request = new AbortController();
-            const timeout = setTimeout(() => request.abort(), 20000);
-            requests.set(root, request);
-            root.dataset.modelsMessage = '正在读取模型列表…'; sync();
-            try {
-                const models = await onRefreshModels(request.signal);
-                if (requests.get(root) === request) root.dataset.modelsMessage = `可选 ${models.length} 个型号，也可以手动输入`;
-            } catch (error) {
-                if (requests.get(root) === request) root.dataset.modelsMessage = request.signal.aborted
-                    ? '读取已取消或超时，可以手动填写型号' : error.message;
-            } finally {
-                clearTimeout(timeout);
-                if (requests.get(root) === request) requests.delete(root);
-                sync();
-            }
+        root.querySelector('[data-model-picker]').addEventListener('change', event => {
+            const val = event.target.value;
+            rewriteModelInput.value = val;
+            onRoute({ model: val }); sync();
         });
+        root.querySelector('[data-refresh-models]').addEventListener('click', () => triggerRefresh(root, 'rewrite', 'modelsMessage', onRefreshModels));
         forms.add(root);
         return root;
     };
@@ -66,34 +153,71 @@ export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onR
         const route = getRouting();
         const busy = getView().busy;
         for (const root of forms) {
+            const seq = root.dataset.formId;
             root.querySelector('[data-auto]').checked = settings.auto;
             const field = root.querySelector('[data-feedback]');
             if (document.activeElement !== field) field.value = settings.feedback;
+
+            // Main API group
+            const mainProfile = root.querySelector('[data-main-profile]');
+            const mainEntries = [['', '当前手动连接（未选配置）'], ...route.mainProfiles.map(p => [p.id, `${p.name} · ${p.api}`])];
+            if (route.mainProfileId && !mainEntries.some(([id]) => id === route.mainProfileId)) mainEntries.push([route.mainProfileId, '当前配置']);
+            syncSelect(mainProfile, mainEntries, route.mainProfileId);
+            mainProfile.disabled = busy || !route.mainCanProfile;
+
+            const mainModel = root.querySelector('[data-main-model]');
+            if (document.activeElement !== mainModel) mainModel.value = route.mainModel;
+            mainModel.placeholder = route.supported ? '选择或输入主模型名称' : '仅聊天补全 API 支持切换主模型';
+            mainModel.disabled = busy || !route.mainCanModel;
+            syncModelPicker({
+                pickerWrap: root.querySelector('[data-main-picker-wrap]'),
+                picker: root.querySelector('[data-main-model-picker]'),
+                list: root.querySelector('[data-main-models]'),
+                models: route.mainModels,
+                value: route.mainModel,
+                allowEmpty: false,
+                disabled: busy || !route.mainCanModel,
+            });
+            root.querySelector('[data-main-source]').textContent = route.mainSource || '未选择';
+            const mainRefreshBtn = root.querySelector('[data-refresh-main]');
+            const mainLoading = requests.has(`${seq}:main`);
+            mainRefreshBtn.disabled = busy || !route.mainCanFetch || mainLoading;
+            mainRefreshBtn.classList.toggle('is-loading', mainLoading);
+            mainRefreshBtn.querySelector('i').classList.toggle('fa-spin', mainLoading);
+            const mainHint = root.querySelector('[data-main-hint]');
+            const mainHintText = root.dataset.mainModelsMessage || (!route.mainCanProfile ? '未检测到连接管理扩展，请直接填写模型或前往酒馆 API 面板调整。' : '');
+            mainHint.hidden = !mainHintText;
+            mainHint.textContent = mainHintText;
+
+            // Rewrite group
             const profile = root.querySelector('[data-profile]');
             const entries = [['', '沿用当前 API'], ...route.profiles.map(p => [p.id, `${p.name} · ${p.api}`])];
             if (settings.profileId && !entries.some(([id]) => id === settings.profileId)) entries.push([settings.profileId, '配置已删除 · 请重新选择']);
-            const profileSignature = JSON.stringify(entries);
-            if (profile.dataset.entries !== profileSignature) {
-                profile.replaceChildren(...entries.map(([id, name]) => new Option(name, id)));
-                profile.dataset.entries = profileSignature;
-            }
-            profile.value = settings.profileId;
+            syncSelect(profile, entries, settings.profileId);
             profile.disabled = busy;
+
             const model = root.querySelector('[data-model]');
             if (document.activeElement !== model) model.value = settings.model;
             model.placeholder = route.model ? `默认：${route.model}` : '沿用默认型号，或输入模型名称';
             model.disabled = busy || !route.supported;
-            const list = root.querySelector('[data-models]');
-            const modelSignature = JSON.stringify(route.models);
-            if (list.dataset.entries !== modelSignature) {
-                list.replaceChildren(...route.models.map(m => new Option(m.label, m.id)));
-                list.dataset.entries = modelSignature;
-            }
+            syncModelPicker({
+                pickerWrap: root.querySelector('[data-picker-wrap]'),
+                picker: root.querySelector('[data-model-picker]'),
+                list: root.querySelector('[data-models]'),
+                models: route.models,
+                value: settings.model,
+                allowEmpty: true,
+                disabled: busy || !route.supported,
+            });
             root.querySelector('[data-source]').textContent = route.source || '未选择';
-            root.querySelector('[data-refresh-models]').disabled = busy || !route.supported || requests.has(root);
+            const rewriteRefreshBtn = root.querySelector('[data-refresh-models]');
+            const rewriteLoading = requests.has(`${seq}:rewrite`);
+            rewriteRefreshBtn.disabled = busy || !route.supported || rewriteLoading;
+            rewriteRefreshBtn.classList.toggle('is-loading', rewriteLoading);
+            rewriteRefreshBtn.querySelector('i').classList.toggle('fa-spin', rewriteLoading);
             root.querySelector('[data-model-hint]').textContent = route.error || (!route.supported
                 ? '模型选择支持聊天补全 API；未指定时仍沿用当前连接。'
-                : root.dataset.modelsMessage || (route.canFetch ? '可从列表选择，也可输入准确型号；点击右侧刷新获取更多模型。' : '使用酒馆已有模型列表，也可手动输入准确型号。'));
+                : root.dataset.modelsMessage || (route.canFetch ? '可点击下拉箭头选型号或手动输入，右侧可刷新模型列表。' : '可点击下拉箭头选择已有型号，也可手动输入准确名称。'));
             const mainText = route.mainModel
                 ? `${route.mainModel}${route.mainSource ? ` (${route.mainSource})` : ''}`
                 : (route.mainSource || '未选择');
@@ -113,7 +237,7 @@ export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onR
         const activeDialog = dialog;
         heading.querySelector('button').addEventListener('click', () => dialog?.close());
         dialog.append(heading, form);
-        dialog.addEventListener('close', () => { requests.get(form)?.abort(); requests.delete(form); forms.delete(form); activeDialog.remove(); if (dialog === activeDialog) dialog = null; });
+        dialog.addEventListener('close', () => { abortForm(form); forms.delete(form); activeDialog.remove(); if (dialog === activeDialog) dialog = null; });
         document.body.append(dialog);
         sync();
         dialog.showModal();

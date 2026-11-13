@@ -118,24 +118,78 @@ export function createModelRouting() {
         return [...found.values()].sort((a, b) => a.id.localeCompare(b.id));
     }
 
+    function mainModelControl(source) {
+        const selector = settingsToUpdate[modelField(source)]?.[0];
+        const control = selector ? document.querySelector(selector) : null;
+        return control instanceof HTMLSelectElement || control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement ? control : null;
+    }
+
     function describe(selection) {
         const available = profiles().filter(p => p.mode === 'cc' && profileSource(p))
             .map(p => ({ id: p.id, name: p.name || p.api, api: p.api }))
             .sort((a, b) => a.name.localeCompare(b.name));
+        const mainProfiles = profiles()
+            .map(p => ({ id: p.id, name: p.name || p.api, api: p.api }))
+            .sort((a, b) => a.name.localeCompare(b.name));
         const ctx = getContext();
         const base = baseline();
+        const mainProfileId = ctx.extensionSettings.connectionManager?.selectedProfile || '';
         const mainSource = ctx.mainApi === 'openai' ? (base?.chat_completion_source || '') : (ctx.mainApi || '');
         const mainModel = ctx.mainApi === 'openai' ? (getChatCompletionModel(base) || '') : '';
+        const mainCanProfile = document.getElementById('connection_profiles') instanceof HTMLSelectElement;
+        const mainCanModel = ctx.mainApi === 'openai' && Boolean(mainModelControl(mainSource));
+        const mainCanFetch = ctx.mainApi === 'openai' && CATALOG_SOURCES.has(mainSource);
+        let mainModels = [];
+        if (ctx.mainApi === 'openai') {
+            try { mainModels = suggestions(targetFor({ profileId: '', model: '' })); } catch {}
+        }
         try {
             const target = targetFor(selection);
             return { profiles: available, models: suggestions(target), source: target.source,
-                label: target.label, model: target.model, mainSource, mainModel,
+                label: target.label, model: target.model,
+                mainProfiles, mainProfileId, mainSource, mainModel, mainModels,
+                mainCanProfile, mainCanModel, mainCanFetch,
                 supported: ctx.mainApi === 'openai',
                 canFetch: CATALOG_SOURCES.has(target.source), error: '' };
         } catch (error) {
             return { profiles: available, models: [], error: error.message, supported: false,
-                label: '', model: '', mainSource, mainModel };
+                label: '', model: '',
+                mainProfiles, mainProfileId, mainSource, mainModel, mainModels,
+                mainCanProfile, mainCanModel, mainCanFetch };
         }
+    }
+
+    function setMainProfile(profileId) {
+        const select = document.getElementById('connection_profiles');
+        if (!(select instanceof HTMLSelectElement)) return false;
+        if (![...select.options].some(o => o.value === profileId)) return false;
+        if (select.value === profileId) return true;
+        select.value = profileId;
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+    }
+
+    function setMainModel(model) {
+        const next = String(model ?? '').trim();
+        const ctx = getContext();
+        if (ctx.mainApi !== 'openai' || !next) return false;
+        const source = ctx.chatCompletionSettings?.chat_completion_source;
+        const control = mainModelControl(source);
+        if (!control) return false;
+        if (control instanceof HTMLSelectElement) {
+            if (![...control.options].some(o => o.value === next)) control.add(new Option(next, next));
+            control.value = next;
+            control.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+        }
+        control.value = next;
+        control.dispatchEvent(new Event('input', { bubbles: true }));
+        control.dispatchEvent(new Event('change', { bubbles: true }));
+        const customSelect = source === 'custom' ? document.getElementById('model_custom_select') : null;
+        if (customSelect instanceof HTMLSelectElement && [...customSelect.options].some(o => o.value === next)) {
+            customSelect.value = next;
+        }
+        return true;
     }
 
     async function refreshModels(selection, signal) {
@@ -201,5 +255,5 @@ export function createModelRouting() {
         } };
     }
 
-    return { describe, refreshModels, acquire };
+    return { describe, refreshModels, acquire, setMainProfile, setMainModel };
 }

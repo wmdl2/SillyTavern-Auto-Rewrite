@@ -248,6 +248,9 @@ export function enable() {
         getRouting: () => routing.describe(settings()),
         onRoute: value => { Object.assign(settings(), value); getContext().saveSettingsDebounced(); },
         onRefreshModels: signal => routing.refreshModels({ ...settings() }, signal),
+        onMainProfile: id => { routing.setMainProfile(id); ui?.sync(); ui?.refresh(); },
+        onMainModel: model => { routing.setMainModel(model); ui?.sync(); ui?.refresh(); },
+        onRefreshMainModels: signal => routing.refreshModels({ profileId: '', model: '' }, signal),
         onMutation: () => markStaging(running),
         onAuto: value => {
             settings().auto = value; getContext().saveSettingsDebounced();
