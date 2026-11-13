@@ -27,7 +27,7 @@ export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onR
                 <p class="auto-rewrite-model-hint" data-model-hint></p>
                 <div class="auto-rewrite-model-summary"><i class="fa-solid fa-arrow-turn-up" aria-hidden="true"></i><span data-route-summary></span></div>
             </section>
-            <label class="auto-rewrite-label">修改意见<textarea class="text_pole" rows="5" spellcheck="false" data-feedback></textarea></label>
+            <label class="auto-rewrite-label">修改意见<textarea class="text_pole" rows="4" spellcheck="false" data-feedback></textarea></label>
             <p class="auto-rewrite-note">沿用当前写作预设。重写结束后恢复首轮连接，原稿保留为上一版。</p>
             <p class="auto-rewrite-status" data-status role="status"></p>`;
         root.querySelector('[data-auto]').addEventListener('change', event => { onAuto(event.target.checked); sync(); refresh(); });
