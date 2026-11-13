@@ -61,10 +61,11 @@ function createFloatingMenu() {
         }
     };
 
-    const setHighlight = btn => {
+    const setHighlight = (btn, ensureVisible = false) => {
         for (const el of list.querySelectorAll('.auto-rewrite-menu-item.is-active')) el.classList.remove('is-active');
         if (!btn) return;
         btn.classList.add('is-active');
+        if (!ensureVisible) return;
         const top = btn.offsetTop - list.offsetTop;
         const bottom = top + btn.offsetHeight;
         if (top < list.scrollTop) list.scrollTop = top - 4;
@@ -115,7 +116,7 @@ function createFloatingMenu() {
                 tag.textContent = item.tag;
                 btn.append(tag);
             }
-            btn.addEventListener('pointerenter', () => setHighlight(btn));
+            btn.addEventListener('pointerenter', () => setHighlight(btn, false));
             btn.addEventListener('click', () => pickItem(item.value));
             return btn;
         }));
@@ -139,10 +140,10 @@ function createFloatingMenu() {
         searchInput.value = '';
         renderItems('');
         menu.hidden = false;
-        position(box);
         if ('showPopover' in menu) {
             try { menu.showPopover(); } catch {}
         }
+        position(box);
         const selected = list.querySelector('[aria-selected="true"]');
         if (selected) list.scrollTop = Math.max(0, selected.offsetTop - list.offsetTop - list.clientHeight / 2 + selected.offsetHeight / 2);
         if (!searchWrap.hidden && window.innerWidth > 640) searchInput.focus({ preventScroll: true });
@@ -171,7 +172,7 @@ function createFloatingMenu() {
             const idx = opts.findIndex(el => el.classList.contains('is-active'));
             const step = event.key === 'ArrowDown' ? 1 : -1;
             const next = idx === -1 ? (step > 0 ? 0 : opts.length - 1) : (idx + step + opts.length) % opts.length;
-            setHighlight(opts[next]);
+            setHighlight(opts[next], true);
             return;
         }
         if (event.key === 'Enter' && (event.target === searchInput || menu.contains(event.target))) {
