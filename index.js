@@ -4,6 +4,7 @@ import { SWIPE_STATE } from '../../../constants.js';
 import { hasPendingFileAttachment } from '../../../chats.js';
 import { getRegexedString, regex_placement } from '../../regex/engine.js';
 import { createRewriteUI } from './ui.js';
+import { createModelRouting } from './model-routing.js';
 import { REVISION, TEMP, remember, collapse, restore, recover, markStaging, liveReply, showStaging, versionLink, jumpVersion } from './revisions.js';
 
 const KEY = 'rewrite_writer';
@@ -25,12 +26,15 @@ let timer;
 let sequence = 0;
 let status = '等待下一次生成';
 const subscriptions = [];
+const routing = createModelRouting();
 
 function settings() {
     const all = getContext().extensionSettings;
     if (!all[KEY] || typeof all[KEY] !== 'object') all[KEY] = {};
     if (typeof all[KEY].auto !== 'boolean') all[KEY].auto = false;
     if (typeof all[KEY].feedback !== 'string') all[KEY].feedback = DEFAULT_FEEDBACK;
+    if (typeof all[KEY].profileId !== 'string') all[KEY].profileId = '';
+    if (typeof all[KEY].model !== 'string') all[KEY].model = '';
     return all[KEY];
 }
 
@@ -179,7 +183,7 @@ async function rewrite(attempt, automatic = true) {
         cancelled: false, generating: false, automatic,
         timing: { startedAt: automatic && Number.isFinite(firstStarted) ? Math.min(firstStarted, now) : now, rewriteStartedAt: now } };
     running = job;
-    setStatus('正在发送修改意见');
+    setStatus('正在准备重写');
     try {
         const { message, index } = appendFeedback(ctx, feedback, job);
         job.feedback = message;
@@ -195,8 +199,9 @@ async function rewrite(attempt, automatic = true) {
         }
         // Standard generation, exactly as replying to the newly added user turn.
         // This guard remains set through all native tool-call continuation requests.
+        job.route = routing.acquire({ ...settings() }, () => sameJob(job) && job.generating);
         job.generating = true;
-        setStatus(automatic ? '正在自动重写' : '正在重写当前版本');
+        setStatus(`${automatic ? '正在自动重写' : '正在重写'} · ${job.route.label}`);
         await getContext().generate('normal', { automatic_trigger: true });
         if (!sameJob(job)) throw new Error('重写已取消或聊天已变化');
         const last = getContext().chat.at(-1);
@@ -218,8 +223,10 @@ async function rewrite(attempt, automatic = true) {
         }
         if (!job.cancelled) console.error('[Auto Rewrite]', error);
     } finally {
+        job.route?.release();
         showStaging();
         if (running === job) running = null;
+        ui?.sync();
         ui?.refresh();
     }
 }
@@ -238,6 +245,9 @@ export function enable() {
     globalThis[RUNTIME] = { disable };
     const { eventTypes: events } = getContext();
     ui = createRewriteUI({ getSettings: settings, getView: view, onRewrite: manualRewrite, onJump: jump,
+        getRouting: () => routing.describe(settings()),
+        onRoute: value => { Object.assign(settings(), value); getContext().saveSettingsDebounced(); },
+        onRefreshModels: signal => routing.refreshModels({ ...settings() }, signal),
         onMutation: () => markStaging(running),
         onAuto: value => {
             settings().auto = value; getContext().saveSettingsDebounced();
@@ -248,6 +258,8 @@ export function enable() {
     ui.install();
     subscribe(events.APP_READY, () => { ui?.install(); void recoverInterrupted(); });
     subscribe(events.SETTINGS_LOADED, () => { ui?.sync(); ui?.refresh(); });
+    for (const type of [events.CONNECTION_PROFILE_CREATED, events.CONNECTION_PROFILE_UPDATED,
+        events.CONNECTION_PROFILE_DELETED, events.CONNECTION_PROFILE_LOADED]) subscribe(type, () => { ui?.sync(); ui?.refresh(); });
     subscribe(events.GENERATION_STARTED, (type, options, dryRun) => {
         if (dryRun) return;
         if (running) {

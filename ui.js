@@ -3,10 +3,12 @@ function duration(ms) {
     return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
 }
 
-export function createRewriteUI({ getSettings, getView, onAuto, onFeedback, onRewrite, onJump, onMutation }) {
+export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onRefreshModels, onAuto, onFeedback, onRewrite, onJump, onMutation }) {
     let panel, bar, footer, nativePager, pagerSlot, dialog, observer, frame, poll, clock, shown;
     let disposed = false;
     const forms = new Set();
+    const requests = new Map();
+    let formSequence = 0;
     const refresh = () => {
         if (disposed || frame) return;
         frame = requestAnimationFrame(() => { frame = null; render(); });
@@ -14,21 +16,84 @@ export function createRewriteUI({ getSettings, getView, onAuto, onFeedback, onRe
     const controls = () => {
         const root = document.createElement('div');
         root.className = 'auto-rewrite-controls';
+        const listId = `auto-rewrite-models-${++formSequence}`;
         root.innerHTML = `<label class="auto-rewrite-setting-toggle"><span><b>自动重写一次</b><small>首轮结束后，按修改意见再写一版</small></span><input type="checkbox" data-auto></label>
+            <section class="auto-rewrite-model-card" aria-label="重写模型设置">
+                <div class="auto-rewrite-model-heading"><span class="auto-rewrite-model-icon"><i class="fa-solid fa-layer-group" aria-hidden="true"></i></span><div><b>重写模型</b><small>为第二轮单独选择连接与型号</small></div><span class="auto-rewrite-model-badge" data-source></span></div>
+                <label class="auto-rewrite-label"><span>API 配置</span><select class="text_pole" data-profile aria-label="重写使用的 API 配置"></select></label>
+                <label class="auto-rewrite-label"><span>模型型号</span><span class="auto-rewrite-model-input"><input class="text_pole" type="text" list="${listId}" autocomplete="off" spellcheck="false" data-model aria-label="重写模型型号"><button type="button" data-refresh-models title="读取所选 API 的模型列表" aria-label="刷新模型列表"><i class="fa-solid fa-rotate" aria-hidden="true"></i></button></span></label>
+                <datalist id="${listId}" data-models></datalist>
+                <p class="auto-rewrite-model-hint" data-model-hint></p>
+                <div class="auto-rewrite-model-summary"><i class="fa-solid fa-arrow-turn-up" aria-hidden="true"></i><span data-route-summary></span></div>
+            </section>
             <label class="auto-rewrite-label">修改意见<textarea class="text_pole" rows="5" spellcheck="false" data-feedback></textarea></label>
-            <p class="auto-rewrite-note">沿用当前连接和预设。完成后替换原楼，原稿保留为上一版。</p>
+            <p class="auto-rewrite-note">沿用当前写作预设。重写结束后恢复首轮连接，原稿保留为上一版。</p>
             <p class="auto-rewrite-status" data-status role="status"></p>`;
         root.querySelector('[data-auto]').addEventListener('change', event => { onAuto(event.target.checked); sync(); refresh(); });
         root.querySelector('[data-feedback]').addEventListener('input', event => { onFeedback(event.target.value); sync(); });
+        root.querySelector('[data-profile]').addEventListener('change', event => {
+            requests.get(root)?.abort(); requests.delete(root);
+            delete root.dataset.modelsMessage;
+            onRoute({ profileId: event.target.value, model: '' }); sync(); refresh();
+        });
+        root.querySelector('[data-model]').addEventListener('input', event => {
+            onRoute({ model: event.target.value }); sync();
+        });
+        root.querySelector('[data-refresh-models]').addEventListener('click', async () => {
+            requests.get(root)?.abort();
+            const request = new AbortController();
+            const timeout = setTimeout(() => request.abort(), 20000);
+            requests.set(root, request);
+            root.dataset.modelsMessage = '正在读取模型列表…'; sync();
+            try {
+                const models = await onRefreshModels(request.signal);
+                if (requests.get(root) === request) root.dataset.modelsMessage = `可选 ${models.length} 个型号，也可以手动输入`;
+            } catch (error) {
+                if (requests.get(root) === request) root.dataset.modelsMessage = request.signal.aborted
+                    ? '读取已取消或超时，可以手动填写型号' : error.message;
+            } finally {
+                clearTimeout(timeout);
+                if (requests.get(root) === request) requests.delete(root);
+                sync();
+            }
+        });
         forms.add(root);
         return root;
     };
     const sync = () => {
         const settings = getSettings();
+        const route = getRouting();
+        const busy = getView().busy;
         for (const root of forms) {
             root.querySelector('[data-auto]').checked = settings.auto;
             const field = root.querySelector('[data-feedback]');
             if (document.activeElement !== field) field.value = settings.feedback;
+            const profile = root.querySelector('[data-profile]');
+            const entries = [['', '沿用当前 API'], ...route.profiles.map(p => [p.id, `${p.name} · ${p.api}`])];
+            if (settings.profileId && !entries.some(([id]) => id === settings.profileId)) entries.push([settings.profileId, '配置已删除 · 请重新选择']);
+            const profileSignature = JSON.stringify(entries);
+            if (profile.dataset.entries !== profileSignature) {
+                profile.replaceChildren(...entries.map(([id, name]) => new Option(name, id)));
+                profile.dataset.entries = profileSignature;
+            }
+            profile.value = settings.profileId;
+            profile.disabled = busy;
+            const model = root.querySelector('[data-model]');
+            if (document.activeElement !== model) model.value = settings.model;
+            model.placeholder = route.model ? `默认：${route.model}` : '沿用默认型号，或输入模型名称';
+            model.disabled = busy || !route.supported;
+            const list = root.querySelector('[data-models]');
+            const modelSignature = JSON.stringify(route.models);
+            if (list.dataset.entries !== modelSignature) {
+                list.replaceChildren(...route.models.map(m => new Option(m.label, m.id)));
+                list.dataset.entries = modelSignature;
+            }
+            root.querySelector('[data-source]').textContent = route.source || '未选择';
+            root.querySelector('[data-refresh-models]').disabled = busy || !route.supported || requests.has(root);
+            root.querySelector('[data-model-hint]').textContent = route.error || (!route.supported
+                ? '模型选择支持聊天补全 API；未指定时仍沿用当前连接。'
+                : root.dataset.modelsMessage || (route.canFetch ? '可从列表选择，也可输入准确型号；点击右侧刷新获取更多模型。' : '使用酒馆已有模型列表，也可手动输入准确型号。'));
+            root.querySelector('[data-route-summary]').textContent = route.error || `${route.label} → ${route.model || '默认模型'}`;
         }
         if (bar) bar.querySelector('[data-auto]').checked = settings.auto;
     };
@@ -43,7 +108,7 @@ export function createRewriteUI({ getSettings, getView, onAuto, onFeedback, onRe
         const activeDialog = dialog;
         heading.querySelector('button').addEventListener('click', () => dialog?.close());
         dialog.append(heading, form);
-        dialog.addEventListener('close', () => { forms.delete(form); activeDialog.remove(); if (dialog === activeDialog) dialog = null; });
+        dialog.addEventListener('close', () => { requests.get(form)?.abort(); requests.delete(form); forms.delete(form); activeDialog.remove(); if (dialog === activeDialog) dialog = null; });
         document.body.append(dialog);
         sync();
         dialog.showModal();
@@ -86,6 +151,7 @@ export function createRewriteUI({ getSettings, getView, onAuto, onFeedback, onRe
         if (disposed) return;
         const view = getView();
         shown = view;
+        sync();
         for (const root of forms) {
             const node = root.querySelector('[data-status]');
             if (node.textContent !== view.status) node.textContent = view.status;
@@ -140,6 +206,8 @@ export function createRewriteUI({ getSettings, getView, onAuto, onFeedback, onRe
         observer?.disconnect();
         if (frame) cancelAnimationFrame(frame);
         clearTimeout(poll); clearInterval(clock);
+        for (const request of requests.values()) request.abort();
+        requests.clear();
         dialog?.close(); panel?.remove(); removeBar(); forms.clear();
     } };
 }
