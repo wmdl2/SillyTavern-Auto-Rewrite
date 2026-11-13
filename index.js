@@ -3,12 +3,14 @@ import { getContext } from '../../../extensions.js';
 import { SWIPE_STATE } from '../../../constants.js';
 import { hasPendingFileAttachment } from '../../../chats.js';
 import { getRegexedString, regex_placement } from '../../regex/engine.js';
+import { createRewriteUI } from './ui.js';
+import { REVISION, TEMP, remember, collapse, restore, recover, markStaging, showStaging, versionLink, jumpVersion } from './revisions.js';
 
 const KEY = 'rewrite_writer';
 const RUNTIME = Symbol.for('st.auto-rewrite.standalone');
 const DEFAULT_FEEDBACK = '上一版的剧情推进和角色行为逻辑不够合理。请根据人物设定、已有关系和当前处境，重新写上一条回复，不要接着初稿续写。重点修正动机与因果、突兀转折和不合理的角色行为。保持当前预设要求的正文、小总结及其他输出格式，只输出完整重写结果。';
 let installed = false;
-let panel;
+let ui;
 let cycle;
 let pending;
 let running;
@@ -47,8 +49,7 @@ function isIdle(ctx = getContext()) {
 
 function setStatus(text) {
     status = text;
-    const node = panel?.querySelector('[data-status]');
-    if (node) node.textContent = text;
+    ui?.refresh();
 }
 
 function clearPending() {
@@ -63,6 +64,42 @@ function matches(attempt, ctx = getContext()) {
         && last === attempt.message && !last.is_user && !last.is_system
         && ctx.chat.length - 1 === attempt.index
         && (last.swipe_id ?? 0) === attempt.swipeId && last.mes === attempt.text;
+}
+
+function latestReply(ctx = getContext()) {
+    const message = ctx.chat.at(-1);
+    if (!isSingleChat(ctx) || !message || message.is_user || message.is_system || !message.mes?.trim() || message.mes.trim() === '...') return null;
+    return { key: chatKey(ctx), index: ctx.chat.length - 1, message, text: message.mes, swipeId: message.swipe_id ?? 0 };
+}
+
+function view() {
+    const ctx = getContext();
+    const reply = running && chatKey(ctx) === running.key && ctx.chat[running.index] === running.source
+        ? { ...running.attempt, message: running.source } : latestReply(ctx);
+    const saved = reply?.message.extra?.[REVISION];
+    return { reply, link: versionLink(reply), status, busy: Boolean(running), cancelled: Boolean(running?.cancelled),
+        idle: isIdle(ctx), composerBusy: composerBusy(), timing: running?.timing ?? saved?.timing,
+        automatic: running ? running.automatic : saved?.automatic };
+}
+
+function manualRewrite(attempt) {
+    if (!attempt || running) return;
+    if (!matches(attempt) || !isIdle()) {
+        globalThis.toastr?.info('请等生成、保存或翻页完成后，再点击当前版本的重写。');
+        ui?.refresh(); return;
+    }
+    if (composerBusy()) { globalThis.toastr?.info('请先发送或清空输入框中的草稿与附件。'); return; }
+    clearPending();
+    if (cycle) cycle.attempted = true;
+    void rewrite(attempt, false);
+}
+
+async function jump(attempt, target) {
+    if (!attempt || running || !isIdle() || !matches(attempt)) return;
+    clearPending();
+    try { await jumpVersion(attempt, target); }
+    catch (error) { console.error('[Auto Rewrite] Version switch', error); globalThis.toastr?.warning('版本切换未完成，请等保存结束后重试。'); }
+    finally { ui?.refresh(); }
 }
 
 function subscribe(type, handler) {
@@ -97,8 +134,8 @@ function sameJob(job) {
     return installed && running === job && !job.cancelled && chatKey() === job.key;
 }
 
-function appendFeedback(ctx, text) {
-    // An ordinary, persistent user message. Do not rearrange history, inspect
+function appendFeedback(ctx, text, job) {
+    // An ordinary user turn during this request. Do not rearrange history, inspect
     // preset-specific tags, inject prompts, or change the original assistant turn.
     const message = {
         name: ctx.name1,
@@ -106,9 +143,10 @@ function appendFeedback(ctx, text) {
         is_system: false,
         send_date: new Date().toISOString(),
         mes: ctx.substituteParams(getRegexedString(text, regex_placement.USER_INPUT)),
-        extra: {},
+        extra: { [TEMP]: { id: job.id, sourceIndex: job.index } },
     };
     if (!message.mes.trim()) throw new Error('修改意见被用户输入正则清空');
+    remember(job);
     const avatar = core.user_avatar;
     if (avatar && Object.hasOwn(ctx.powerUserSettings?.personas ?? {}, avatar)) {
         message.force_avatar = ctx.getThumbnailUrl('persona', avatar);
@@ -120,86 +158,70 @@ function appendFeedback(ctx, text) {
     return { message, index };
 }
 
-async function rewrite(attempt) {
+async function rewrite(attempt, automatic = true) {
+    if (running) return;
     const ctx = getContext();
     const feedback = settings().feedback.trim();
-    if (!feedback) { setStatus('请先填写修改意见'); return; }
+    if (!feedback) { setStatus('请先填写修改意见'); ui?.openSettings(); return; }
     if (!matches(attempt, ctx) || !isIdle(ctx) || composerBusy()) return;
-    const job = { key: attempt.key, cancelled: false, generating: false };
+    const now = Date.now();
+    const firstStarted = Date.parse(attempt.message.gen_started);
+    const job = { id: `rewrite-${now.toString(36)}-${Math.random().toString(36).slice(2)}`,
+        key: attempt.key, index: attempt.index, attempt, source: attempt.message,
+        original: structuredClone(attempt.message), prefix: ctx.chat.slice(0, attempt.index),
+        cancelled: false, generating: false, automatic,
+        timing: { startedAt: automatic && Number.isFinite(firstStarted) ? Math.min(firstStarted, now) : now, rewriteStartedAt: now } };
     running = job;
     setStatus('正在发送修改意见');
     try {
-        const { message, index } = appendFeedback(ctx, feedback);
+        const { message, index } = appendFeedback(ctx, feedback, job);
         job.feedback = message;
+        markStaging(job);
         await ctx.saveChat();
-        if (!sameJob(job) || getContext().chat.at(-1) !== message) return;
+        if (!sameJob(job) || getContext().chat.at(-1) !== message) throw new Error('重写已取消或聊天已变化');
         await ctx.eventSource.emit(ctx.eventTypes.MESSAGE_SENT, index);
-        if (!sameJob(job) || getContext().chat.at(-1) !== message) return;
+        if (!sameJob(job) || getContext().chat.at(-1) !== message) throw new Error('重写已取消或聊天已变化');
         await ctx.eventSource.emit(ctx.eventTypes.USER_MESSAGE_RENDERED, index);
-        if (!sameJob(job) || getContext().chat.at(-1) !== message) return;
+        if (!sameJob(job) || getContext().chat.at(-1) !== message) throw new Error('重写已取消或聊天已变化');
         if (composerBusy()) {
-            setStatus('修改意见已保留；输入框有新草稿，未自动开始生成');
-            return;
+            throw new Error('输入框中出现了新草稿或附件，本次重写已停止');
         }
         // Standard generation, exactly as replying to the newly added user turn.
         // This guard remains set through all native tool-call continuation requests.
         job.generating = true;
-        setStatus('正在自动重写');
+        setStatus(automatic ? '正在自动重写' : '正在重写当前版本');
         await getContext().generate('normal', { automatic_trigger: true });
-        if (!sameJob(job)) return;
+        if (!sameJob(job)) throw new Error('重写已取消或聊天已变化');
         const last = getContext().chat.at(-1);
-        setStatus(last && !last.is_user && !last.is_system && last.mes?.trim() && last.mes.trim() !== '...'
-            ? '自动重写已完成' : '未收到重写正文，原稿和修改意见已保留');
+        if (!last || last === job.source || last.is_user || last.is_system || !last.mes?.trim() || last.mes.trim() === '...') throw new Error('未收到可用的重写正文');
+        job.timing.finishedAt = Date.now();
+        await collapse(job, last);
+        setStatus('重写已完成，原稿已保存为上一版');
     } catch (error) {
-        if (!job.cancelled && installed && chatKey() === job.key) {
-            const text = job.feedback ? '自动重写未完成，原稿和修改意见已保留' : '自动重写未启动，原稿保持不变';
-            setStatus(text);
-            console.error('[Auto Rewrite]', error);
-            globalThis.toastr?.warning(text);
+        job.timing.finishedAt ??= Date.now();
+        if (!job.settled) {
+            const restored = await restore(job).catch(cleanupError => { console.error('[Auto Rewrite] Cleanup', cleanupError); return false; });
+            if (installed && chatKey() === job.key) {
+                setStatus(restored ? job.cancelled ? '重写已取消，原稿已恢复' : '重写未完成，原稿已保留' : '聊天已变化，保留记录供检查，未覆盖新内容');
+                if (!job.cancelled) globalThis.toastr?.warning(`${status}：${error.message}`);
+            }
+        } else if (installed && chatKey() === job.key) {
+            setStatus('回复版本已保留，保存或界面更新未完成');
+            globalThis.toastr?.warning(status);
         }
+        if (!job.cancelled) console.error('[Auto Rewrite]', error);
     } finally {
+        showStaging();
         if (running === job) running = null;
+        ui?.refresh();
     }
 }
 
-function installSettings() {
-    if (panel) return;
-    const target = document.querySelector('#extensions_settings2') ?? document.querySelector('#extensions_settings');
-    if (!target) return;
-    panel = document.createElement('div');
-    panel.className = 'extension_container auto-rewrite-settings';
-    panel.innerHTML = `<div class="inline-drawer">
-        <div class="inline-drawer-toggle inline-drawer-header"><b>自动重写 · 独立版</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
-        <div class="inline-drawer-content"><div class="auto-rewrite-body">
-            <label class="checkbox_label"><input type="checkbox" data-auto><span>生成结束后自动重写一次</span></label>
-            <label for="auto-rewrite-feedback">修改意见</label>
-            <textarea id="auto-rewrite-feedback" class="text_pole" rows="5" spellcheck="false"></textarea>
-            <p class="auto-rewrite-note">原稿 → 修改意见（用户消息）→ 新回复。沿用当前连接和预设，三条消息都会保留。</p>
-            <p class="auto-rewrite-status" data-status role="status"></p>
-        </div></div></div>`;
-    target.append(panel);
-    const auto = panel.querySelector('[data-auto]');
-    const feedback = panel.querySelector('textarea');
-    auto.checked = settings().auto;
-    feedback.value = settings().feedback;
-    auto.addEventListener('change', () => {
-        settings().auto = auto.checked;
-        getContext().saveSettingsDebounced();
-        if (!auto.checked) { clearPending(); setStatus(running ? '当前重写继续进行，后续自动重写已关闭' : '自动重写已关闭'); }
-        else setStatus('等待下一次生成');
-    });
-    feedback.addEventListener('input', () => {
-        settings().feedback = feedback.value;
-        getContext().saveSettingsDebounced();
-    });
-    setStatus(status);
-}
-
-function syncSettings() {
-    installSettings();
-    if (!panel) return;
-    panel.querySelector('[data-auto]').checked = settings().auto;
-    panel.querySelector('textarea').value = settings().feedback;
+async function recoverInterrupted() {
+    if (!installed || running || !isIdle()) return;
+    try { if (await recover()) setStatus('已清理中断的重写，原稿已恢复'); }
+    catch (error) { console.error('[Auto Rewrite] Recovery', error); }
+    ui?.refresh();
 }
 
 export function enable() {
@@ -208,21 +230,31 @@ export function enable() {
     installed = true;
     globalThis[RUNTIME] = { disable };
     const { eventTypes: events } = getContext();
-    installSettings();
-    subscribe(events.APP_READY, syncSettings);
-    subscribe(events.SETTINGS_LOADED, syncSettings);
+    ui = createRewriteUI({ getSettings: settings, getView: view, onRewrite: manualRewrite, onJump: jump,
+        onMutation: () => markStaging(running),
+        onAuto: value => {
+            settings().auto = value; getContext().saveSettingsDebounced();
+            if (!value) clearPending();
+            setStatus(value ? '等待下一次生成' : running ? '当前重写继续进行，后续自动重写已关闭' : '自动重写已关闭');
+        },
+        onFeedback: value => { settings().feedback = value; getContext().saveSettingsDebounced(); } });
+    ui.install();
+    subscribe(events.APP_READY, () => { ui?.install(); void recoverInterrupted(); });
+    subscribe(events.SETTINGS_LOADED, () => { ui?.sync(); ui?.refresh(); });
     subscribe(events.GENERATION_STARTED, (type, options, dryRun) => {
         if (dryRun) return;
         if (running) {
             // Another extension started a request while feedback events were firing.
-            if (!running.generating) { running.cancelled = true; setStatus('已由其他生成流程接管'); }
+            if (!running.generating || !options?.automatic_trigger) { running.cancelled = true; running.timing.finishedAt ??= Date.now(); setStatus('已由其他生成流程接管'); }
             return;
         }
         clearPending();
         cycle = { id: ++sequence, key: chatKey(), attempted: false,
             eligible: [undefined, 'normal', 'regenerate', 'swipe'].includes(type) && isSingleChat(getContext()) };
+        ui?.refresh();
     });
     subscribe(events.MESSAGE_RECEIVED, (id, type) => {
+        markStaging(running); ui?.refresh();
         if (running || !settings().auto || !cycle?.eligible || cycle.attempted || type === 'first_message') return;
         const ctx = getContext();
         const stream = ctx.streamingProcessor;
@@ -234,18 +266,29 @@ export function enable() {
         pending = { cycleId: cycle.id, key: cycle.key, index: Number(id), message, text, swipeId: message.swipe_id ?? 0 };
         queue();
     });
-    subscribe(events.GENERATION_ENDED, queue);
+    subscribe(events.GENERATION_ENDED, () => { ui?.refresh(); queue(); });
     subscribe(events.GENERATION_STOPPED, () => {
         clearPending(); cycle = null;
-        if (running) running.cancelled = true;
-        setStatus('已停止自动重写，已有聊天记录保留');
+        if (running) { running.cancelled = true; running.timing.finishedAt ??= Date.now(); }
+        setStatus(running ? '已取消，正在恢复原稿' : '已停止生成');
     });
     for (const type of [events.CHAT_CHANGED, events.MAIN_API_CHANGED, events.OAI_PRESET_CHANGED_BEFORE,
         events.CONNECTION_PROFILE_LOADED]) subscribe(type, () => {
         clearPending(); cycle = null;
-        if (running) running.cancelled = true;
+        if (running) { running.cancelled = true; running.timing.finishedAt ??= Date.now(); }
         setStatus('上下文已切换，等待下一次生成');
+        void recoverInterrupted();
     });
+    subscribe(events.CHAT_LOADED, () => { ui?.install(); void recoverInterrupted(); });
+    for (const type of [events.MESSAGE_SWIPED, events.MESSAGE_UPDATED, events.MESSAGE_DELETED,
+        events.CHARACTER_MESSAGE_RENDERED, events.MORE_MESSAGES_LOADED]) subscribe(type, () => ui?.refresh());
+    subscribe(events.MESSAGE_SENT, id => {
+        if (running && getContext().chat[Number(id)] !== running.feedback) {
+            running.cancelled = true; running.timing.finishedAt ??= Date.now(); showStaging();
+        }
+    });
+    $(document).on('input.autoRewriteComposer change.autoRewriteComposer', '#send_textarea, #file_form_input', () => ui?.refresh());
+    void recoverInterrupted();
 }
 
 export function disable() {
@@ -258,7 +301,9 @@ export function disable() {
     }
     const ctx = getContext();
     for (const [type, handler] of subscriptions.splice(0)) ctx.eventSource.removeListener(type, handler);
-    panel?.remove(); panel = null;
+    $(document).off('.autoRewriteComposer');
+    ui?.dispose(); ui = null;
+    showStaging();
 }
 
 jQuery(enable);
