@@ -94,7 +94,11 @@ export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onR
             root.querySelector('[data-model-hint]').textContent = route.error || (!route.supported
                 ? '模型选择支持聊天补全 API；未指定时仍沿用当前连接。'
                 : root.dataset.modelsMessage || (route.canFetch ? '可从列表选择，也可输入准确型号；点击右侧刷新获取更多模型。' : '使用酒馆已有模型列表，也可手动输入准确型号。'));
-            root.querySelector('[data-route-summary]').textContent = route.error || `${route.label} → ${route.model || '默认模型'}`;
+            const mainText = route.mainModel
+                ? `${route.mainModel}${route.mainSource ? ` (${route.mainSource})` : ''}`
+                : (route.mainSource || '未选择');
+            const rewriteText = route.error || `${route.label} · ${route.model || '默认模型'}`;
+            root.querySelector('[data-route-summary]').textContent = `主 API：${mainText}  →  重写：${rewriteText}`;
         }
         if (bar) bar.querySelector('[data-auto]').checked = settings.auto;
     };
@@ -250,7 +254,10 @@ export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onR
         if (time.textContent !== label) time.textContent = label;
         const meta = bar.querySelector('.auto-rewrite-meta');
         meta.hidden = !caption && !timing;
-        meta.title = `第 ${view.reply.swipeId + 1}/${swipeCount} 版${caption ? ` · ${caption}` : ''}${label ? ` · ${label}` : ''}`;
+        const route = getRouting();
+        const mainText = route.mainModel ? `${route.mainModel}${route.mainSource ? ` (${route.mainSource})` : ''}` : (route.mainSource || '未选择');
+        const rewriteText = route.error || `${route.label} · ${route.model || '默认模型'}`;
+        meta.title = `第 ${view.reply.swipeId + 1}/${swipeCount} 版${caption ? ` · ${caption}` : ''}${label ? ` · ${label}` : ''}\n主 API：${mainText} → 重写：${rewriteText}`;
         if (view.busy && !timing?.finishedAt && !clock) clock = setInterval(refresh, 1000);
         if ((!view.busy || timing?.finishedAt) && clock) { clearInterval(clock); clock = null; }
         if (!view.idle && !view.busy && !poll) poll = setTimeout(() => { poll = null; refresh(); }, 200);

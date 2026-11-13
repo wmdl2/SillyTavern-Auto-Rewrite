@@ -259,7 +259,10 @@ export function enable() {
     subscribe(events.APP_READY, () => { ui?.install(); void recoverInterrupted(); });
     subscribe(events.SETTINGS_LOADED, () => { ui?.sync(); ui?.refresh(); });
     for (const type of [events.CONNECTION_PROFILE_CREATED, events.CONNECTION_PROFILE_UPDATED,
-        events.CONNECTION_PROFILE_DELETED, events.CONNECTION_PROFILE_LOADED]) subscribe(type, () => { ui?.sync(); ui?.refresh(); });
+        events.CONNECTION_PROFILE_DELETED, events.CONNECTION_PROFILE_LOADED,
+        events.CHATCOMPLETION_MODEL_CHANGED, events.SETTINGS_UPDATED]) {
+        if (type) subscribe(type, () => { ui?.sync(); ui?.refresh(); });
+    }
     subscribe(events.GENERATION_STARTED, (type, options, dryRun) => {
         if (dryRun) return;
         if (running) {
@@ -297,6 +300,7 @@ export function enable() {
         clearPending(); cycle = null;
         if (running) { running.cancelled = true; running.timing.finishedAt ??= Date.now(); }
         setStatus('上下文已切换，等待下一次生成');
+        ui?.sync();
         void recoverInterrupted();
     });
     subscribe(events.CHAT_LOADED, () => { ui?.install(); void recoverInterrupted(); });

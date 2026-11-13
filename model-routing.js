@@ -122,13 +122,19 @@ export function createModelRouting() {
         const available = profiles().filter(p => p.mode === 'cc' && profileSource(p))
             .map(p => ({ id: p.id, name: p.name || p.api, api: p.api }))
             .sort((a, b) => a.name.localeCompare(b.name));
+        const ctx = getContext();
+        const base = baseline();
+        const mainSource = ctx.mainApi === 'openai' ? (base?.chat_completion_source || '') : (ctx.mainApi || '');
+        const mainModel = ctx.mainApi === 'openai' ? (getChatCompletionModel(base) || '') : '';
         try {
             const target = targetFor(selection);
             return { profiles: available, models: suggestions(target), source: target.source,
-                label: target.label, model: target.model, supported: getContext().mainApi === 'openai',
+                label: target.label, model: target.model, mainSource, mainModel,
+                supported: ctx.mainApi === 'openai',
                 canFetch: CATALOG_SOURCES.has(target.source), error: '' };
         } catch (error) {
-            return { profiles: available, models: [], error: error.message, supported: false, label: '', model: '' };
+            return { profiles: available, models: [], error: error.message, supported: false,
+                label: '', model: '', mainSource, mainModel };
         }
     }
 
