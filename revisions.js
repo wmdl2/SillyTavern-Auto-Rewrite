@@ -79,7 +79,7 @@ export function markStaging(job) {
         waiting.className = 'auto-rewrite-preview-waiting';
         waiting.setAttribute('role', 'status');
         waiting.innerHTML = '<span class="auto-rewrite-preview-label">重写中 · 新版本</span><p>正在等待上游返回内容…</p>';
-        const footer = block.querySelector('.auto-rewrite-actions');
+        const footer = block.querySelector(':scope > .auto-rewrite-footer, :scope > .auto-rewrite-actions');
         if (footer) footer.before(waiting); else block.append(waiting);
     }
 }

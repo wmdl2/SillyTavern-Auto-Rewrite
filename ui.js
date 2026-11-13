@@ -5,6 +5,7 @@ function duration(ms) {
 
 export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onRefreshModels, onAuto, onFeedback, onRewrite, onJump, onMutation }) {
     let panel, bar, footer, nativePager, pagerSlot, dialog, observer, frame, poll, clock, shown;
+    let dock, dockViewport, dockObserver, dockPadding;
     let disposed = false;
     const forms = new Set();
     const requests = new Map();
@@ -128,14 +129,66 @@ export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onR
         root.querySelector('[data-settings]').addEventListener('click', openSettings);
         return root;
     };
-    const removeBar = () => {
+    const detachFooter = () => {
+        bar?.remove();
         if (pagerSlot?.isConnected && nativePager?.parentElement === footer) pagerSlot.replaceWith(nativePager);
         else pagerSlot?.remove();
-        footer?.remove(); bar?.remove();
-        footer = null; nativePager = null; pagerSlot = null; bar = null;
+        footer?.remove();
+        footer = null; nativePager = null; pagerSlot = null;
+    };
+    const positionDock = () => {
+        if (!dock || !dockViewport) return;
+        const rect = dockViewport.getBoundingClientRect();
+        dock.style.left = `${rect.left + 8}px`;
+        dock.style.width = `${Math.max(0, rect.width - 16)}px`;
+        dock.style.bottom = `${Math.max(0, window.innerHeight - rect.bottom) + 8}px`;
+        const padding = `${Math.ceil(dock.getBoundingClientRect().height) + 16}px`;
+        if (dockViewport.style.getPropertyValue('--auto-rewrite-dock-space') !== padding) {
+            dockViewport.style.setProperty('--auto-rewrite-dock-space', padding);
+        }
+    };
+    const releaseDock = () => {
+        dockObserver?.disconnect(); dockObserver = null;
+        window.removeEventListener('resize', positionDock);
+        window.visualViewport?.removeEventListener('resize', positionDock);
+        window.visualViewport?.removeEventListener('scroll', positionDock);
+        if (dockViewport) {
+            dockViewport.classList.remove('auto-rewrite-docked');
+            for (const [key, value, priority] of dockPadding ?? []) {
+                if (value) dockViewport.style.setProperty(key, value, priority);
+                else dockViewport.style.removeProperty(key);
+            }
+        }
+        bar?.remove(); dock?.remove();
+        dock = null; dockViewport = null; dockPadding = null;
+    };
+    const removeBar = () => {
+        if (dock) releaseDock();
+        detachFooter(); bar = null;
+    };
+    const mountDock = () => {
+        if (dock) return;
+        detachFooter();
+        if (!bar) bar = makeBar();
+        dockViewport = document.getElementById('chat');
+        if (!dockViewport) return;
+        dockPadding = ['--auto-rewrite-dock-base', '--auto-rewrite-dock-space'].map(key =>
+            [key, dockViewport.style.getPropertyValue(key), dockViewport.style.getPropertyPriority(key)]);
+        dockViewport.style.setProperty('--auto-rewrite-dock-base', getComputedStyle(dockViewport).paddingBottom);
+        dockViewport.classList.add('auto-rewrite-docked');
+        dock = document.createElement('div');
+        dock.className = 'auto-rewrite-live-dock';
+        dock.append(bar);
+        document.body.append(dock);
+        positionDock();
+        dockObserver = new ResizeObserver(positionDock);
+        dockObserver.observe(dockViewport); dockObserver.observe(dock);
+        window.addEventListener('resize', positionDock);
+        window.visualViewport?.addEventListener('resize', positionDock);
+        window.visualViewport?.addEventListener('scroll', positionDock);
     };
     const mountBar = block => {
-        bar = makeBar();
+        if (!bar) bar = makeBar();
         nativePager = block.closest('.mes')?.querySelector('.swipeRightBlock');
         if (!nativePager) { block.append(bar); return; }
         // Move the real pager, preserving its handlers and native visibility rules.
@@ -156,11 +209,19 @@ export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onR
             const node = root.querySelector('[data-status]');
             if (node.textContent !== view.status) node.textContent = view.status;
         }
-        if (bar && (!bar.isConnected || Number(bar.closest('.mes')?.getAttribute('mesid')) !== view.reply?.index)) removeBar();
-        if (!view.reply) { clearInterval(clock); clock = null; return; }
-        const block = document.querySelector(`#chat .mes[mesid="${view.reply.index}"] .mes_block`);
-        if (!block) return;
-        if (!bar) mountBar(block);
+        if (view.busy) {
+            // Keep the same controls anchored to the viewport through temporary
+            // replies and tool continuations, rather than rebuilding each floor.
+            mountDock();
+        } else {
+            if (dock) releaseDock();
+            if (bar?.isConnected && Number(bar.closest('.mes')?.getAttribute('mesid')) !== view.reply?.index) removeBar();
+            if (!view.reply) { removeBar(); clearInterval(clock); clock = null; return; }
+            const block = document.querySelector(`#chat .mes[mesid="${view.reply.index}"] .mes_block`);
+            if (!block) return;
+            if (!bar?.isConnected) { detachFooter(); mountBar(block); }
+        }
+        if (!bar || !view.reply) return;
         const button = bar.querySelector('[data-rewrite]');
         const disabled = view.busy || !view.idle || view.composerBusy;
         button.disabled = disabled;
@@ -171,7 +232,7 @@ export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onR
         const caption = view.busy ? `${view.reply.preview ? '重写中 · 新版本 · ' : ''}${view.status}` : `${view.link?.original ? '正在查看原稿' : view.link ? '重写版' : '当前正文'} · 第 ${view.reply.swipeId + 1}/${view.reply.message.swipes?.length || 1} 版`;
         if (bar.querySelector('[data-caption]').textContent !== caption) bar.querySelector('[data-caption]').textContent = caption;
         const jump = bar.querySelector('[data-jump]');
-        jump.hidden = !view.link;
+        jump.hidden = view.busy || !view.link;
         jump.disabled = view.busy || !view.idle;
         if (view.link) jump.querySelector('span').textContent = view.link.label;
         bar.querySelector('[data-auto]').checked = getSettings().auto;
