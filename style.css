@@ -1,4 +1,8 @@
 .auto-rewrite-staging { display: none !important; }
+.auto-rewrite-preview-covered, .auto-rewrite-preview-old { display: none !important; }
+.auto-rewrite-preview-waiting { min-height: 100px; padding: 22px 0 12px; }
+.auto-rewrite-preview-label { display: inline-block; padding: 4px 9px; border: 1px solid rgba(182,164,248,.25); border-radius: 7px; color: #b6a4f8; background: rgba(182,164,248,.07); font-size: .75em; }
+.auto-rewrite-preview-waiting p { margin: 15px 0 0; opacity: .55; font-size: .88em; line-height: 1.6; }
 .auto-rewrite-actions {
     --rewrite-accent: #b6a4f8;
     display: flex; align-items: center; justify-content: space-between; gap: 12px;

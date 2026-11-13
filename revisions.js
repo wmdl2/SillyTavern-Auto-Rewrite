@@ -33,15 +33,62 @@ export function ownsTail(job, ctx = getContext()) {
         && ctx.chat.slice(job.index + 2).every(message => !message.is_user);
 }
 
+export function liveReply(job) {
+    if (!job || job.cancelled || !ownsTail(job)) return null;
+    const ctx = getContext();
+    for (let index = ctx.chat.length - 1; index > job.index + 1; index--) {
+        const message = ctx.chat[index];
+        if (!message.is_user && !message.is_system && document.querySelector(`#chat > .mes[mesid="${index}"]`)) {
+            return { key: job.key, index, message, text: message.mes, swipeId: message.swipe_id ?? 0, preview: true };
+        }
+    }
+    return null;
+}
+
+function revealOriginal(source) {
+    source?.classList.remove('auto-rewrite-preview-covered');
+    source?.querySelectorAll('.auto-rewrite-preview-old').forEach(node => node.classList.remove('auto-rewrite-preview-old'));
+    source?.querySelectorAll('.auto-rewrite-preview-waiting').forEach(node => node.remove());
+}
+
 export function markStaging(job) {
     if (!job || !ownsTail(job)) return;
+    const source = document.querySelector(`#chat > .mes[mesid="${job.index}"]`);
+    const preview = liveReply(job);
     document.querySelectorAll('#chat > .mes').forEach(node => {
-        if (Number(node.getAttribute('mesid')) > job.index) node.classList.add('auto-rewrite-staging');
+        const index = Number(node.getAttribute('mesid'));
+        if (index > job.index) node.classList.toggle('auto-rewrite-staging', index !== preview?.index);
     });
+    if (job.cancelled) { revealOriginal(source); return; }
+    if (preview) {
+        // Keep the actual native streaming message visible. No text copies,
+        // alternate formatter, or changes to the request/history are involved.
+        source?.classList.add('auto-rewrite-preview-covered');
+        return;
+    }
+    // Before core creates its streaming message, show a blank rewrite page
+    // instead of continuing to present the old draft as the current output.
+    source?.classList.remove('auto-rewrite-preview-covered');
+    const block = source?.querySelector('.mes_block');
+    if (!block) return;
+    for (const node of block.children) {
+        if (!node.matches('.ch_name, .auto-rewrite-actions, .auto-rewrite-preview-waiting')) node.classList.add('auto-rewrite-preview-old');
+    }
+    if (!block.querySelector('.auto-rewrite-preview-waiting')) {
+        const waiting = document.createElement('div');
+        waiting.className = 'auto-rewrite-preview-waiting';
+        waiting.setAttribute('role', 'status');
+        waiting.innerHTML = '<span class="auto-rewrite-preview-label">重写中 · 新版本</span><p>正在等待上游返回内容…</p>';
+        const footer = block.querySelector('.auto-rewrite-actions');
+        if (footer) footer.before(waiting); else block.append(waiting);
+    }
 }
 
 export function showStaging() {
     document.querySelectorAll('.auto-rewrite-staging').forEach(node => node.classList.remove('auto-rewrite-staging'));
+    document.querySelectorAll('.auto-rewrite-preview-covered').forEach(node => node.classList.remove('auto-rewrite-preview-covered'));
+    document.querySelectorAll('.auto-rewrite-preview-old').forEach(node => node.classList.remove('auto-rewrite-preview-old'));
+    document.querySelectorAll('.auto-rewrite-preview-waiting').forEach(node => node.remove());
 }
 
 async function redraw(index, key, focus = true) {

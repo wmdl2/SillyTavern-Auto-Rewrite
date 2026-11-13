@@ -4,7 +4,7 @@ import { SWIPE_STATE } from '../../../constants.js';
 import { hasPendingFileAttachment } from '../../../chats.js';
 import { getRegexedString, regex_placement } from '../../regex/engine.js';
 import { createRewriteUI } from './ui.js';
-import { REVISION, TEMP, remember, collapse, restore, recover, markStaging, showStaging, versionLink, jumpVersion } from './revisions.js';
+import { REVISION, TEMP, remember, collapse, restore, recover, markStaging, liveReply, showStaging, versionLink, jumpVersion } from './revisions.js';
 
 const KEY = 'rewrite_writer';
 const RUNTIME = Symbol.for('st.auto-rewrite.standalone');
@@ -75,7 +75,7 @@ function latestReply(ctx = getContext()) {
 function view() {
     const ctx = getContext();
     const reply = running && chatKey(ctx) === running.key && ctx.chat[running.index] === running.source
-        ? { ...running.attempt, message: running.source } : latestReply(ctx);
+        ? liveReply(running) ?? { ...running.attempt, message: running.source, preview: !running.cancelled } : latestReply(ctx);
     const saved = reply?.message.extra?.[REVISION];
     return { reply, link: versionLink(reply), status, busy: Boolean(running), cancelled: Boolean(running?.cancelled),
         idle: isIdle(ctx), composerBusy: composerBusy(), timing: running?.timing ?? saved?.timing,
@@ -270,6 +270,7 @@ export function enable() {
     subscribe(events.GENERATION_STOPPED, () => {
         clearPending(); cycle = null;
         if (running) { running.cancelled = true; running.timing.finishedAt ??= Date.now(); }
+        markStaging(running);
         setStatus(running ? '已取消，正在恢复原稿' : '已停止生成');
     });
     for (const type of [events.CHAT_CHANGED, events.MAIN_API_CHANGED, events.OAI_PRESET_CHANGED_BEFORE,

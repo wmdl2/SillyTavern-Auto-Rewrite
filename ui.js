@@ -83,7 +83,7 @@ export function createRewriteUI({ getSettings, getView, onAuto, onFeedback, onRe
         if (button.querySelector('span').textContent !== text) button.querySelector('span').textContent = text;
         button.title = view.composerBusy ? '请先发送或清空输入框中的草稿与附件' : `重写当前第 ${view.reply.swipeId + 1} 版`;
         bar.dataset.busy = String(view.busy);
-        const caption = view.busy ? view.status : `${view.link?.original ? '正在查看原稿' : view.link ? '重写版' : '当前正文'} · 第 ${view.reply.swipeId + 1}/${view.reply.message.swipes?.length || 1} 版`;
+        const caption = view.busy ? `${view.reply.preview ? '重写中 · 新版本 · ' : ''}${view.status}` : `${view.link?.original ? '正在查看原稿' : view.link ? '重写版' : '当前正文'} · 第 ${view.reply.swipeId + 1}/${view.reply.message.swipes?.length || 1} 版`;
         if (bar.querySelector('[data-caption]').textContent !== caption) bar.querySelector('[data-caption]').textContent = caption;
         const jump = bar.querySelector('[data-jump]');
         jump.hidden = !view.link;
