@@ -72,7 +72,7 @@ export function markStaging(job) {
     const block = source?.querySelector('.mes_block');
     if (!block) return;
     for (const node of block.children) {
-        if (!node.matches('.ch_name, .auto-rewrite-actions, .auto-rewrite-preview-waiting')) node.classList.add('auto-rewrite-preview-old');
+        if (!node.matches('.ch_name, .auto-rewrite-actions, .auto-rewrite-footer, .auto-rewrite-preview-waiting')) node.classList.add('auto-rewrite-preview-old');
     }
     if (!block.querySelector('.auto-rewrite-preview-waiting')) {
         const waiting = document.createElement('div');

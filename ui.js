@@ -4,7 +4,7 @@ function duration(ms) {
 }
 
 export function createRewriteUI({ getSettings, getView, onAuto, onFeedback, onRewrite, onJump, onMutation }) {
-    let panel, bar, dialog, observer, frame, poll, clock, shown;
+    let panel, bar, footer, nativePager, pagerSlot, dialog, observer, frame, poll, clock, shown;
     let disposed = false;
     const forms = new Set();
     const refresh = () => {
@@ -63,6 +63,25 @@ export function createRewriteUI({ getSettings, getView, onAuto, onFeedback, onRe
         root.querySelector('[data-settings]').addEventListener('click', openSettings);
         return root;
     };
+    const removeBar = () => {
+        if (pagerSlot?.isConnected && nativePager?.parentElement === footer) pagerSlot.replaceWith(nativePager);
+        else pagerSlot?.remove();
+        footer?.remove(); bar?.remove();
+        footer = null; nativePager = null; pagerSlot = null; bar = null;
+    };
+    const mountBar = block => {
+        bar = makeBar();
+        nativePager = block.closest('.mes')?.querySelector('.swipeRightBlock');
+        if (!nativePager) { block.append(bar); return; }
+        // Move the real pager, preserving its handlers and native visibility rules.
+        // Remember its original location so disabling the extension restores it.
+        pagerSlot = document.createComment('auto-rewrite-native-pager');
+        nativePager.before(pagerSlot);
+        footer = document.createElement('div');
+        footer.className = 'auto-rewrite-footer';
+        footer.append(bar, nativePager);
+        block.append(footer);
+    };
     function render() {
         if (disposed) return;
         const view = getView();
@@ -71,11 +90,11 @@ export function createRewriteUI({ getSettings, getView, onAuto, onFeedback, onRe
             const node = root.querySelector('[data-status]');
             if (node.textContent !== view.status) node.textContent = view.status;
         }
-        if (bar && (!bar.isConnected || Number(bar.closest('.mes')?.getAttribute('mesid')) !== view.reply?.index)) { bar.remove(); bar = null; }
+        if (bar && (!bar.isConnected || Number(bar.closest('.mes')?.getAttribute('mesid')) !== view.reply?.index)) removeBar();
         if (!view.reply) { clearInterval(clock); clock = null; return; }
         const block = document.querySelector(`#chat .mes[mesid="${view.reply.index}"] .mes_block`);
         if (!block) return;
-        if (!bar) { bar = makeBar(); block.append(bar); }
+        if (!bar) mountBar(block);
         const button = bar.querySelector('[data-rewrite]');
         const disabled = view.busy || !view.idle || view.composerBusy;
         button.disabled = disabled;
@@ -121,6 +140,6 @@ export function createRewriteUI({ getSettings, getView, onAuto, onFeedback, onRe
         observer?.disconnect();
         if (frame) cancelAnimationFrame(frame);
         clearTimeout(poll); clearInterval(clock);
-        dialog?.close(); panel?.remove(); bar?.remove(); forms.clear();
+        dialog?.close(); panel?.remove(); removeBar(); forms.clear();
     } };
 }

@@ -11,6 +11,21 @@
     color: var(--SmartThemeBodyColor); font: inherit; line-height: 1.45;
 }
 .auto-rewrite-actions [hidden] { display: none !important; }
+.auto-rewrite-footer {
+    display: grid; grid-template-columns: minmax(0,1fr) auto auto; align-items: center;
+    column-gap: 12px; row-gap: 7px; margin: 14px 0 2px; padding-top: 12px;
+    border-top: 1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));
+}
+.auto-rewrite-footer .auto-rewrite-actions { display: contents; }
+.auto-rewrite-footer .auto-rewrite-heading { grid-column: 1; grid-row: 1; }
+.auto-rewrite-footer .auto-rewrite-heading [data-caption] { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.auto-rewrite-footer .auto-rewrite-buttons { grid-column: 2; grid-row: 1; flex-wrap: nowrap; }
+#chat .mes .auto-rewrite-footer > .swipeRightBlock {
+    grid-column: 3; grid-row: 1; position: static !important; inset: auto !important;
+    margin: 0 !important; align-self: center; justify-self: end; flex: none;
+}
+.auto-rewrite-footer:hover > .swipeRightBlock, .auto-rewrite-footer:focus-within > .swipeRightBlock { opacity: 1; }
+.auto-rewrite-footer .auto-rewrite-time { grid-column: 1/-1; grid-row: 2; padding-left: 42px; }
 .auto-rewrite-heading { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .auto-rewrite-emblem { display: grid; place-items: center; width: 32px; height: 32px; flex: none; border: 1px solid rgba(182,164,248,.2); border-radius: 10px; color: var(--rewrite-accent); background: rgba(182,164,248,.07); font-size: .85em; }
 .auto-rewrite-heading > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
@@ -60,6 +75,11 @@
     .auto-rewrite-primary { flex: 1; }
     .auto-rewrite-time { padding-left: 0; }
     .auto-rewrite-dialog { padding: 20px; }
+    .auto-rewrite-footer { grid-template-columns: minmax(0,1fr) auto; column-gap: 8px; }
+    .auto-rewrite-footer .auto-rewrite-heading { grid-column: 1/-1; grid-row: 1; }
+    .auto-rewrite-footer .auto-rewrite-buttons { grid-column: 1; grid-row: 2; width: auto; flex-wrap: wrap; }
+    #chat .mes .auto-rewrite-footer > .swipeRightBlock { grid-column: 2; grid-row: 2; align-self: end; }
+    .auto-rewrite-footer .auto-rewrite-time { grid-column: 1/-1; grid-row: 3; padding-left: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
     .auto-rewrite-actions button, .auto-rewrite-dialog button, .auto-rewrite-quick-toggle input::after, .auto-rewrite-setting-toggle input::after { transition: none; }
