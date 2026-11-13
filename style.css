@@ -11,6 +11,10 @@
     color: var(--SmartThemeBodyColor); font: inherit; line-height: 1.45;
 }
 .auto-rewrite-actions [hidden] { display: none !important; }
+/* The pager is in normal flow here; discard themes' absolute-pager reserve. */
+#chat > .mes:not(.smallSysMes):has(> .mes_block > .auto-rewrite-footer) {
+    padding-bottom: 8px !important;
+}
 .auto-rewrite-footer {
     display: grid; grid-template-columns: minmax(0,1fr) auto auto; align-items: center;
     column-gap: 12px; row-gap: 7px; margin: 14px 0 2px; padding-top: 12px;
